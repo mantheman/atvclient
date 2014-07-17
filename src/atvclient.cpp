@@ -21,10 +21,11 @@
 #include <dirent.h>
 #include <usb.h>
 #include <sys/time.h>
+#include <map>
 
 #include "xbmcclient.h"
 
-#define VENDOR_APPLE		0x05ac
+#define VENDOR_APPLE          0x05ac
 #define PRODUCT_APPLE_IR_0    0x8240
 #define PRODUCT_APPLE_IR_1    0x8241
 #define PRODUCT_APPLE_IR_2    0x8242
@@ -169,11 +170,34 @@ static CPacketNOTIFICATION remote_unpaired("Remote unpaired", "You can now contr
 static CPacketNOTIFICATION remote_pair_failed("Remote already paired", "This AppleTV was paired to another remote. To unpair, hold down menu and rewind for 6 seconds.", NULL, NULL);
 
 const char* remoteIdFile = "/etc/atvremoteid";
-static int pairedRemoteId = 0; 
+static int pairedRemoteId = 0;
+
+// new globals to support NEC mode
+bool nec_mode = 0;
+int repeat_throttle = 200;
+static std::map< unsigned long, const char * > nec_map;
+
+static CXBMCClient xbmc;
+static void xbmc_button (const char *button)
+{
+  if (debug) printf("NEC send [%s]\n", button);
+  xbmc.SendButton(button, "R1", BTN_DOWN | BTN_QUEUE | BTN_NO_REPEAT);
+}
+
+static void xbmc_button_down (const char *button)
+{
+  if (debug) printf("NEC send down [%s]\n", button);
+  xbmc.SendButton(button, "R1", BTN_DOWN);
+}
+
+static void xbmc_button_up (const char *button)
+{
+  if (debug) printf("NEC send up [%s]\n", button);
+  xbmc.SendButton(button, "R1", BTN_UP);
+}
 
 /* figure out kernel name corresponding to usb device */
-static int usb_make_kernel_name(usb_dev_handle *dev, int interface,
-				char *name, int namelen)
+static int usb_make_kernel_name(usb_dev_handle *dev, int interface, char *name, int namelen)
 {
 	DIR *dir;
 	struct dirent *ent;
@@ -233,8 +257,7 @@ static int usb_make_kernel_name(usb_dev_handle *dev, int interface,
 }
 
 /* (re)attach usb device to kernel driver (need hotplug support in kernel) */
-static int usb_attach_kernel_driver_np(usb_dev_handle *dev, int interface,
-				       const char *driver)
+static int usb_attach_kernel_driver_np(usb_dev_handle *dev, int interface, const char *driver)
 {
 	char name[PATH_MAX], buf[PATH_MAX];
 
@@ -465,6 +488,61 @@ void send_button(int button) {
   button_map[button] -> Send(sockfd, my_addr);
 }
 
+void handle_nec(struct ir_command command)
+{
+  static unsigned long previous;
+  static long startTime;
+
+  // release
+  if (command.flags == 0x00)
+  {
+    previous = 0;
+    return;
+  }
+
+  // convert command into 32 bit button
+  unsigned long button = command.unused<<24 | command.event<<16 | command.address<<8 | command.eventId;
+  if (debug) printf("NEC code %08lx\n", button);
+
+  // button start time
+  long now = millis();
+  if (button != previous)
+    startTime = now;
+
+  std::map< unsigned long, const char * >::iterator it;
+  it = nec_map.find(button);
+  if (it != nec_map.end())
+  {
+    const char *key = it->second;
+
+    // throttle button presses
+    bool throttled = false;
+    long diff = now - startTime;
+    if (diff > 0)
+      throttled = (diff < repeat_throttle);
+
+    if (debug)
+      printf("  ** key %s%s\n", key, throttled ? " *throttled*" : "");
+
+    /*
+    if (debug) {
+        printf("  first: %lu\n", startTime);
+        printf("   time: %lu\n", now);
+        printf("   diff: %lu%s\n", diff, throttled ? " *throttled*" : " *ok to send*");
+    }
+    */
+
+    if (!throttled)
+    {
+      xbmc_button(key);
+      startTime = now;
+      previous = button;
+    }
+  }
+  else if (debug)
+    printf("  ** code not mapped\n");
+}
+
 void handle_button(struct ir_command command) {
   static unsigned short previousButton;
   static unsigned char holdButtonSent;
@@ -680,6 +758,8 @@ void usage(int argc, char **argv) {
   if (argc >=1) {
     printf("Usage: %s [-i mode] [-s mode] [-H mode] [-b mode] [-B] [-h]\n", argv[0]);
     printf("  Options:\n");
+    printf("      -n\tEnable raw NEC remote support requires config file.\n");
+    printf("      -r\tSet repeate throttle for raw NEC mode, default 200 ms, minimum 100 ms.\n");
     printf("      -m\tEnable multi-remote support.\n");
     printf("      -i\tChange the LED mode for when the receiver is idle.\n");
     printf("      -b\tChange the LED mode for when the receiver is receiving a button press.\n");
@@ -699,6 +779,72 @@ void usage(int argc, char **argv) {
   }
 }
 
+void read_nec_config(const char *config)
+{
+  if (debug)
+    printf("Parsing NEC config file \"%s\"\n", config);
+
+  FILE *fp = fopen(config, "r");
+  if (fp == NULL)
+  {
+    fprintf(stderr, "Cant open %s config file, quitting\n", config);
+    exit(1);
+  }
+
+  char *line;
+  size_t len;
+  while (getline(&line, &len, fp) > 0 )
+  {
+    // replace new line with \0
+    char *repl = strchr(line, '\n');
+    if (repl)
+      *repl = '\0';
+    // replace carriage return with \0
+    repl = strchr(line, '\r');
+    if (repl)
+      *repl = '\0';
+    // truncate comments
+    repl = strchr(line, '#');
+    if (repl)
+      *repl = '\0';
+
+    // parse whatever is left on the line
+    if (line)
+    {
+      char *c = strtok(line, " \t");
+      char *k = strtok(NULL, " \t");
+      if (c && k)
+      {
+        // remove 0x 
+        repl = strstr(c, "0x");
+        if (repl)
+          c += 2;
+        // remove 0X
+        repl = strstr(c, "0X");
+        if (repl)
+          c += 2;
+        // lowercase
+        for (repl = c; *repl != '\0'; repl++)
+          *repl = tolower(*repl);
+
+        // code is hexadecimal
+        unsigned long code = strtoul(c, NULL, 16);
+
+        if (debug)
+          printf("  button %s -> key %s\n", c, k);
+
+        // need to copy contents of *k into a new buffer before inserting into map
+        size_t size = strlen(k)+1;
+        char* buffer = new char[size];
+        memcpy(buffer,k,size);
+        nec_map[code]=buffer;
+      }
+    }
+  }
+
+  fclose(fp);
+}
+
 int main(int argc, char **argv) {
   struct ir_command command;
   struct ir_command timeoutCommand;
@@ -707,8 +853,12 @@ int main(int argc, char **argv) {
   
   int led_brightness = 1;
  
-  while ((c = getopt (argc, argv, "mBi:b:s:H:hd")) != -1)
+  while ((c = getopt (argc, argv, "n:r:mBi:b:s:H:hd")) != -1)
   switch (c) {
+    case 'n':
+      nec_mode = 1; read_nec_config(optarg); break;
+    case 'r':
+      repeat_throttle = atol(optarg); break;
     case 'm':
       multi_mode = 1; break;
     case 'i':
@@ -742,7 +892,16 @@ int main(int argc, char **argv) {
     default:
       abort();
   }
-  
+ 
+  if (nec_mode)
+  {
+    // repeat throttle is rounded up to 100
+    // valid range 100 - 1000
+    repeat_throttle = ((repeat_throttle + 99)/100)*100;
+    if (repeat_throttle > 1000) repeat_throttle = 1000;
+    if (debug) printf("NEC repeat throttle: %i ms\n", repeat_throttle);
+  }
+ 
   set_led_brightness(led_brightness);
   
   memset(&timeoutCommand, 0, sizeof(timeoutCommand));
@@ -864,12 +1023,14 @@ int main(int argc, char **argv) {
   set_led(idle_mode);
     
   while(1){
-    int result = usb_interrupt_read(get_ir(), 0x82, (char*) &command, sizeof(command), keydown ? BUTTON_TIMEOUT : 0);  
+    int result = usb_interrupt_read(get_ir(), 0x82, (char*) &command, sizeof(command), keydown ? BUTTON_TIMEOUT : 0);
     if(result > 0) {
       // we have an IR code!
-      unsigned long start = millis();
+      keydown = 1;
       if(debug) dumphex((unsigned char*) &command, result);
-      
+
+      if (nec_mode) handle_nec(command);
+
       if(command.flags == 0x26) {
         // set
         command.event = 0xee;
@@ -890,7 +1051,6 @@ int main(int argc, char **argv) {
         default:
           if(debug) printf("Unknown event %x\n", command.event);
       }
-      keydown = 1;
       
     } else if(result == -110) {
       // timeout, reset led
@@ -898,6 +1058,7 @@ int main(int argc, char **argv) {
       set_led(idle_mode);
       handle_button(timeoutCommand);
       handle_special(timeoutCommand);
+      if (nec_mode) handle_nec(timeoutCommand);
     } else {
       // something else
       keydown = 0;
