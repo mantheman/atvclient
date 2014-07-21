@@ -2,3 +2,11 @@
 ===========
 
  * First release!
+
+
+0.2 Release
+===========
+
+ * User configurable support for NEC remotes.
+   Example configuration files in conf folder.
+
