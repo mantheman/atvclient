@@ -1,2 +1,5 @@
+v0.1:
 Initial release.
 
+v0.2:
+Added user configurable support for NEC protocol remotes.
