@@ -4,3 +4,28 @@ ATVClient - AppleTV Remote XBMC Eventclient
 A XMBC event client for the AppleTV, emulating the behaviour as experienced
 under the AppleTV OS.
 
+
+UPDATE
+------
+
+Added user configurable support for NEC protocol remotes.
+
+Run atvclient in debug mode and validate that it sees codes from your NEC
+remote.  If your is compatible, output will look like below.
+
+26 f6 00 bc 43 
+Event id: 0000
+Event id: 0000
+
+26 f6 00 be 41 
+Event id: 0000
+Event id: 0000
+
+Ignore the first byte and record the remaining four as your remote code.
+Create a text configuration file that maps the four byte remote code to
+the remote key names recognized by Xbmc.
+
+Example configuration files and the xbmc remote key list are found in the
+examples directory.
+
+
