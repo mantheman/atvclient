@@ -175,7 +175,7 @@ static int pairedRemoteId = 0;
 // new globals to support NEC mode
 bool nec_mode = 0;
 int repeat_throttle = 200;
-static std::map< unsigned long, const char * > nec_map;
+static std::map< uint32_t, const char * > nec_map;
 
 static CXBMCClient xbmc;
 static void xbmc_button (const char *button)
@@ -501,7 +501,7 @@ void handle_nec(struct ir_command command)
   }
 
   // convert command into 32 bit button
-  unsigned long button = command.unused<<24 | command.event<<16 | command.address<<8 | command.eventId;
+  uint32_t button = command.unused<<24 | command.event<<16 | command.address<<8 | command.eventId;
   if (debug) printf("NEC code %08lx\n", button);
 
   // button start time
@@ -509,7 +509,7 @@ void handle_nec(struct ir_command command)
   if (button != previous)
     startTime = now;
 
-  std::map< unsigned long, const char * >::iterator it;
+  std::map< uint32_t, const char * >::iterator it;
   it = nec_map.find(button);
   if (it != nec_map.end())
   {
@@ -791,10 +791,10 @@ void read_nec_config(const char *config)
     exit(1);
   }
 
-  char *line;
-  size_t len;
-  while (getline(&line, &len, fp) > 0 )
+  char buf[4096];
+  while (fgets(buf, sizeof(buf), fp) != NULL)
   {
+    char *line = buf;
     // replace new line with \0
     char *repl = strchr(line, '\n');
     if (repl)
@@ -823,15 +823,12 @@ void read_nec_config(const char *config)
         repl = strstr(c, "0X");
         if (repl)
           c += 2;
-        // lowercase
-        for (repl = c; *repl != '\0'; repl++)
-          *repl = tolower(*repl);
 
-        // code is hexadecimal
-        unsigned long code = strtoul(c, NULL, 16);
+        // convert hexadecimal string to uint32
+        uint32_t code = strtoul(c, NULL, 16);
 
         if (debug)
-          printf("  button %s -> key %s\n", c, k);
+          printf("  button %08x -> key %s\n", code, k);
 
         // need to copy contents of *k into a new buffer before inserting into map
         size_t size = strlen(k)+1;
@@ -841,7 +838,6 @@ void read_nec_config(const char *config)
       }
     }
   }
-
   fclose(fp);
 }
 
