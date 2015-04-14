@@ -168,9 +168,9 @@ static int sockfd;
 static CPacketBUTTON* button_map[0xff];
 static CPacketBUTTON* multi_map[0xff];
 
-static CPacketNOTIFICATION remote_paired("Remote paired", "You can now only control XBMC using the control you're holding. To unpair, hold down menu and rewind for 6 seconds.", NULL, NULL);
-static CPacketNOTIFICATION remote_unpaired("Remote unpaired", "You can now control XBMC with any Apple remote.", NULL, NULL);
-static CPacketNOTIFICATION remote_pair_failed("Remote already paired", "This AppleTV was paired to another remote. To unpair, hold down menu and rewind for 6 seconds.", NULL, NULL);
+static CPacketNOTIFICATION remote_paired("Remote paired", "You can now only control XBMC using the control you're holding. To unpair, hold down menu and rewind for 6 seconds.", 0, NULL);
+static CPacketNOTIFICATION remote_unpaired("Remote unpaired", "You can now control XBMC with any Apple remote.", 0, NULL);
+static CPacketNOTIFICATION remote_pair_failed("Remote already paired", "This AppleTV was paired to another remote. To unpair, hold down menu and rewind for 6 seconds.", 0, NULL);
 
 const char* remoteIdFile = "/etc/atvremoteid";
 static int pairedRemoteId = 0;
@@ -514,7 +514,7 @@ void handle_nec(struct ir_command command)
 
   // convert command into 32 bit button
   uint32_t button = command.unused<<24 | command.event<<16 | command.address<<8 | command.eventId;
-  if (debug) printf("NEC code %08lx\n", button);
+  if (debug) printf("NEC code %08lx\n", (unsigned long)button);
 
   // button start time
   long now = millis();
@@ -719,7 +719,7 @@ int readPairedAddressId() {
   FILE *fp = fopen(remoteIdFile, "r");
   if(fp != NULL) {
     int address;
-    fscanf(fp, "%d", &address);
+    int i = fscanf(fp, "%d", &address);
     fclose(fp);   
     return address;
   } else {
